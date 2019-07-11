@@ -50,38 +50,16 @@ import static com.milaboratory.mixcr.basictypes.AlignmentsIO.DEFAULT_ALIGNMENTS_
 
 public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
     public static final int DEFAULT_ENCODER_THREADS = 3;
-    static final String MAGIC_V13 = "MiXCR.VDJC.V13";
-    static final String MAGIC_V14 = "MiXCR.VDJC.V14";
-    static final String MAGIC = MAGIC_V14;
+    static final String MAGIC_V15 = "MiXCR.VDJC.V14";
+    static final String MAGIC = MAGIC_V15;
     static final int MAGIC_LENGTH = 14;
     static final byte[] MAGIC_BYTES = MAGIC.getBytes(StandardCharsets.US_ASCII);
-
-    /**
-     * Buffer for accumulation of alignments written with write(VDJCAlignments) method. Buffer is flushed if
-     * number of accumulated alignments is alignmentsInBlock or close() method was invoked.
-     */
-    volatile ArrayList<VDJCAlignments> currentBuffer;
-
-    /**
-     * Number of alignments in block. Larger number allows for better compression while consume more memory.
-     */
-    final int alignmentsInBlock;
-
-    /**
-     * Raw underlying output stream
-     */
-    final OutputStream rawOutput;
 
     /**
      * This number will be added to the end of the file to report number of processed read to the following processing
      * steps. Mainly for informative statistics reporting.
      */
     long numberOfProcessedReads = -1;
-
-    /**
-     * Pool of encoders
-     */
-    final BasicVDJCAlignmentWriterFactory writerFactory;
 
     /**
      * Initialized after header, implements all internal encoding logic.
