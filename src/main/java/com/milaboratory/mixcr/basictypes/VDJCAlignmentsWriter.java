@@ -35,22 +35,27 @@ import com.milaboratory.mixcr.util.MiXCRVersionInfo;
 import com.milaboratory.mixcr.vdjaligners.VDJCAligner;
 import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
 import com.milaboratory.primitivio.PrimitivO;
+import com.milaboratory.primitivio.blocks.PrimitivOBlocks;
+import com.milaboratory.primitivio.blocks.PrimitivOBlocksStats;
+import com.milaboratory.primitivio.blocks.PrimitivOHybrid;
 import io.repseq.core.GeneFeature;
 import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
 
 import static com.milaboratory.mixcr.basictypes.AlignmentsIO.DEFAULT_ALIGNMENTS_IN_BLOCK;
 
 public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
     public static final int DEFAULT_ENCODER_THREADS = 3;
-    static final String MAGIC_V15 = "MiXCR.VDJC.V14";
+    static final String MAGIC_V15 = "MiXCR.VDJC.V15";
     static final String MAGIC = MAGIC_V15;
     static final int MAGIC_LENGTH = 14;
     static final byte[] MAGIC_BYTES = MAGIC.getBytes(StandardCharsets.US_ASCII);
@@ -61,10 +66,14 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
      */
     long numberOfProcessedReads = -1;
 
-    /**
-     * Initialized after header, implements all internal encoding logic.
-     */
-    volatile BasicVDJCAlignmentWriterFactory.Writer writer = null;
+    /** Writer settings */
+    final int encoderThreads, alignmentsInBlock;
+
+    /** Main block output class */
+    final PrimitivOHybrid output;
+
+    /** Initialized after headers */
+    volatile PrimitivOBlocks<VDJCAlignments>.Writer writer;
 
     boolean closed = false;
 
@@ -73,7 +82,11 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
     }
 
     public VDJCAlignmentsWriter(String fileName, int encoderThreads, int alignmentsInBlock) throws IOException {
-        this(new File(fileName), encoderThreads, alignmentsInBlock);
+        this(fileName, encoderThreads, alignmentsInBlock, ForkJoinPool.commonPool());
+    }
+
+    public VDJCAlignmentsWriter(String fileName, int encoderThreads, int alignmentsInBlock, ExecutorService executor) throws IOException {
+        this(new PrimitivOHybrid(executor, Paths.get(fileName)), encoderThreads, alignmentsInBlock);
     }
 
     public VDJCAlignmentsWriter(File file) throws IOException {
@@ -81,18 +94,17 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
     }
 
     public VDJCAlignmentsWriter(File file, int encoderThreads, int alignmentsInBlock) throws IOException {
-        this(IOUtil.createOS(file), encoderThreads, alignmentsInBlock);
+        this(file, encoderThreads, alignmentsInBlock, ForkJoinPool.commonPool());
     }
 
-    public VDJCAlignmentsWriter(OutputStream output) {
-        this(output, DEFAULT_ENCODER_THREADS, DEFAULT_ALIGNMENTS_IN_BLOCK);
+    public VDJCAlignmentsWriter(File file, int encoderThreads, int alignmentsInBlock, ExecutorService executor) throws IOException {
+        this(new PrimitivOHybrid(executor, file.toPath()), encoderThreads, alignmentsInBlock);
     }
 
-    public VDJCAlignmentsWriter(OutputStream output, int encoderThreads, int alignmentsInBlock) {
-        this.rawOutput = output;
+    public VDJCAlignmentsWriter(PrimitivOHybrid output, int encoderThreads, int alignmentsInBlock) {
+        this.output = output;
+        this.encoderThreads = encoderThreads;
         this.alignmentsInBlock = alignmentsInBlock;
-        this.currentBuffer = new ArrayList<>(alignmentsInBlock);
-        this.writerFactory = new BasicVDJCAlignmentWriterFactory(encoderThreads);
     }
 
     @Override
@@ -127,47 +139,52 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
         if (writer != null)
             throw new IllegalStateException("Header already written.");
 
-        PrimitivO output = new PrimitivO(rawOutput);
+        try (PrimitivO o = output.beginPrimitivO(true)) {
+            // Writing meta data using raw stream for easy reconstruction with simple tools like hex viewers
 
-        // Writing meta data using raw stream for easy reconstruction with simple tools like hex viewers
+            // Writing magic bytes
+            assert MAGIC_BYTES.length == MAGIC_LENGTH;
+            o.write(MAGIC_BYTES);
 
-        // Writing magic bytes
-        assert MAGIC_BYTES.length == MAGIC_LENGTH;
-        output.write(MAGIC_BYTES);
+            // Writing version information
+            o.writeUTF(
+                    MiXCRVersionInfo.get().getVersionString(
+                            AppVersionInfo.OutputType.ToFile));
 
-        // Writing version information
-        output.writeUTF(
-                MiXCRVersionInfo.get().getVersionString(
-                        AppVersionInfo.OutputType.ToFile));
+            // Writing parameters
+            o.writeObject(parameters);
 
-        // Writing parameters
-        output.writeObject(parameters);
+            // Writing history
+            if (ppConfiguration != null)
+                this.pipelineConfiguration = ppConfiguration;
+            o.writeObject(pipelineConfiguration);
 
-        // Writing history
-        if (ppConfiguration != null)
-            this.pipelineConfiguration = ppConfiguration;
-        output.writeObject(pipelineConfiguration);
+            IOUtil.writeAndRegisterGeneReferences(o, genes, parameters);
 
-        IOUtil.writeAndRegisterGeneReferences(output, genes, parameters);
-
-        // Registering links to features to align
-        for (GeneType gt : GeneType.VDJC_REFERENCE) {
-            GeneFeature feature = parameters.getFeatureToAlign(gt);
-            output.writeObject(feature);
-            if (feature != null)
-                output.putKnownObject(feature);
+            // Registering links to features to align
+            for (GeneType gt : GeneType.VDJC_REFERENCE) {
+                GeneFeature feature = parameters.getFeatureToAlign(gt);
+                o.writeObject(feature);
+                if (feature != null)
+                    o.putKnownObject(feature);
+            }
         }
 
         // Saving output state
-        writer = writerFactory.createWriter(output.getState(), rawOutput, false);
+        writer = output.beginPrimitivOBlocks(encoderThreads, alignmentsInBlock);
     }
 
     public int getEncodersCount() {
-        return writerFactory.getEncodersCount();
+        if (writer == null)
+            return 0;
+        return writer.getParent().getStats().getConcurrency();
     }
 
     public int getBusyEncoders() {
-        return writerFactory.getBusyEncoders();
+        if (writer == null)
+            return 0;
+        PrimitivOBlocksStats stats = writer.getParent().getStats();
+        return stats.getOngoingSerdes() + stats.getOngoingIOOps();
     }
 
     @Override
