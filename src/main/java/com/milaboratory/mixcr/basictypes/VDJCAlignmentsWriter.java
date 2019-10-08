@@ -46,7 +46,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
@@ -139,9 +138,8 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
         if (writer != null)
             throw new IllegalStateException("Header already written.");
 
+        // Writing meta data using raw stream for easy reconstruction with simple tools like hex viewers
         try (PrimitivO o = output.beginPrimitivO(true)) {
-            // Writing meta data using raw stream for easy reconstruction with simple tools like hex viewers
-
             // Writing magic bytes
             assert MAGIC_BYTES.length == MAGIC_LENGTH;
             o.write(MAGIC_BYTES);
@@ -170,7 +168,6 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
             }
         }
 
-        // Saving output state
         writer = output.beginPrimitivOBlocks(encoderThreads, alignmentsInBlock);
     }
 
@@ -195,45 +192,30 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
         if (alignment == null)
             throw new NullPointerException();
 
-        currentBuffer.add(alignment);
-
-        if (currentBuffer.size() == alignmentsInBlock)
-            flushBlock();
-    }
-
-    /**
-     * Flush alignment buffer
-     */
-    private void flushBlock() {
-        if (currentBuffer.isEmpty())
-            return;
-
-        // Enqueue block for async encoding and compression
-        writer.writeAsync(currentBuffer);
-        currentBuffer = new ArrayList<>(alignmentsInBlock);
+        writer.write(alignment);
     }
 
     @Override
     public synchronized void close() {
         try {
             if (!closed) {
-                flushBlock();
-
                 writer.close(); // This will also write stream termination symbol/block to the stream
-                writerFactory.close(); // This blocks the thread until all workers flush their data to the underlying stream
 
-                // [ numberOfProcessedReads : long ]
-                byte[] footer = new byte[8];
-                // Number of processed reads is known only in the end of analysis
-                // Writing it as last piece of information in the stream
-                AlignmentsIO.writeLongBE(numberOfProcessedReads, footer, 0);
-                rawOutput.write(footer);
+                try (PrimitivO o = output.beginPrimitivO()) {
+                    // [ numberOfProcessedReads : long ]
+                    byte[] footer = new byte[8];
+                    
+                    // Number of processed reads is known only in the end of analysis
+                    // Writing it as last piece of information in the stream
+                    AlignmentsIO.writeLongBE(numberOfProcessedReads, footer, 0);
+                    o.write(footer);
 
-                // Writing end-magic as a file integrity sign
-                rawOutput.write(IOUtil.getEndMagicBytes());
-
-                rawOutput.close();
-                closed = true;
+                    // Writing end-magic as a file integrity sign
+                    o.write(IOUtil.getEndMagicBytes());
+                } finally {
+                    closed = true;
+                    output.close();
+                }
             }
         } catch (IOException e) {
             throw new RuntimeException(e);
