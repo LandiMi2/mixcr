@@ -50,7 +50,7 @@ public interface AlignmentsProvider {
     final class Util {
         static AlignmentsProvider createProvider(final byte[] rawData, final VDJCLibraryRegistry geneResolver) {
             return new VDJCAlignmentsReaderWrapper(() ->
-                    new VDJCAlignmentsReader(new ByteArrayInputStream(rawData), geneResolver, rawData.length, true)
+                    new VDJCAlignmentsReader(new ByteArrayInputStream(rawData), rawData.length, geneResolver, true)
             );
         }
 

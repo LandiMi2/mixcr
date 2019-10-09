@@ -34,6 +34,7 @@ import com.milaboratory.cli.PipelineConfiguration;
 import com.milaboratory.mixcr.util.MiXCRVersionInfo;
 import com.milaboratory.mixcr.vdjaligners.VDJCAligner;
 import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
+import com.milaboratory.primitivio.PrimitivI;
 import com.milaboratory.primitivio.PrimitivO;
 import com.milaboratory.primitivio.blocks.PrimitivOBlocks;
 import com.milaboratory.primitivio.blocks.PrimitivOBlocksStats;
@@ -41,12 +42,14 @@ import com.milaboratory.primitivio.blocks.PrimitivOHybrid;
 import io.repseq.core.GeneFeature;
 import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
+import io.repseq.core.VDJCLibraryRegistry;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
 
@@ -157,18 +160,31 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
                 this.pipelineConfiguration = ppConfiguration;
             o.writeObject(pipelineConfiguration);
 
-            IOUtil.writeAndRegisterGeneReferences(o, genes, parameters);
-
-            // Registering links to features to align
-            for (GeneType gt : GeneType.VDJC_REFERENCE) {
-                GeneFeature feature = parameters.getFeatureToAlign(gt);
-                o.writeObject(feature);
-                if (feature != null)
-                    o.putKnownObject(feature);
-            }
+            initPrimitivOState(o, genes, parameters);
         }
 
         writer = output.beginPrimitivOBlocks(encoderThreads, alignmentsInBlock);
+    }
+
+    /**
+     * Writes minimal required header information to PrimitivO state and executes minimal required state initialization
+     * procedure for compact serialization of {@link VDJCAlignments} objects (so that all the sequences and genes
+     * will be serialized as references).
+     *
+     * Use {@link VDJCAlignmentsReader#initPrimitivIState(PrimitivI, HasFeatureToAlign, VDJCLibraryRegistry, Map)} as
+     * this method counterpart.
+     */
+    public static void initPrimitivOState(PrimitivO o, List<VDJCGene> genes,
+                                          HasFeatureToAlign featuresToAlign) {
+        IOUtil.writeAndRegisterGeneReferences(o, genes, featuresToAlign);
+
+        // Registering links to features to align
+        for (GeneType gt : GeneType.VDJC_REFERENCE) {
+            GeneFeature feature = featuresToAlign.getFeatureToAlign(gt);
+            o.writeObject(feature);
+            if (feature != null)
+                o.putKnownObject(feature);
+        }
     }
 
     public int getEncodersCount() {
@@ -204,7 +220,7 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
                 try (PrimitivO o = output.beginPrimitivO()) {
                     // [ numberOfProcessedReads : long ]
                     byte[] footer = new byte[8];
-                    
+
                     // Number of processed reads is known only in the end of analysis
                     // Writing it as last piece of information in the stream
                     AlignmentsIO.writeLongBE(numberOfProcessedReads, footer, 0);

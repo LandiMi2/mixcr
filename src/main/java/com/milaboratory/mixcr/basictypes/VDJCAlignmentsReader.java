@@ -33,52 +33,63 @@ import cc.redberry.pipe.OutputPortCloseable;
 import com.milaboratory.cli.PipelineConfiguration;
 import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
 import com.milaboratory.primitivio.PrimitivI;
+import com.milaboratory.primitivio.PrimitivO;
+import com.milaboratory.primitivio.blocks.PrimitivIBlocks;
+import com.milaboratory.primitivio.blocks.PrimitivIBlocksStats;
+import com.milaboratory.primitivio.blocks.PrimitivIHybrid;
 import com.milaboratory.util.CanReportProgress;
-import com.milaboratory.util.CountingInputStream;
 import io.repseq.core.GeneFeature;
 import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
 import io.repseq.core.VDJCLibraryRegistry;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
 
 import static com.milaboratory.mixcr.basictypes.VDJCAlignmentsWriter.*;
-import static com.milaboratory.mixcr.cli.SerializerCompatibilityUtil.add_v3_0_3_CustomSerializers;
 
 public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR implements
         OutputPortCloseable<VDJCAlignments>,
         CanReportProgress {
-    private static final int DEFAULT_BUFFER_SIZE = 1048576; // 1 MB
+    public static final int DEFAULT_CONCURRENCY = 4;
+    public static final int DEFAULT_READ_AHEAD_BLOCKS = 5;
+
+    final PrimitivIHybrid input;
+    final int readAheadBlocks, concurrency;
+    final VDJCLibraryRegistry vdjcRegistry;
+
+    PrimitivIBlocks<VDJCAlignments>.Reader reader;
 
     VDJCAlignerParameters parameters;
     PipelineConfiguration pipelineConfiguration;
     List<VDJCGene> usedGenes;
-    final InputStream inputStream;
-    final CountingInputStream countingInputStream;
-    final VDJCLibraryRegistry vdjcRegistry;
+
     String versionInfo;
     String magic;
     long counter = 0;
     long numberOfReads = -1;
     boolean closed = false;
     final long size;
-    final boolean useSeparateDecoderThread;
-    volatile BasicVDJCAlignmentReader reader = null;
 
     public VDJCAlignmentsReader(String fileName) throws IOException {
-        this(new File(fileName), VDJCLibraryRegistry.getDefault());
+        this(fileName, VDJCLibraryRegistry.getDefault());
     }
 
     public VDJCAlignmentsReader(String fileName, VDJCLibraryRegistry vdjcRegistry) throws IOException {
-        this(new File(fileName), vdjcRegistry);
+        this(fileName, vdjcRegistry, DEFAULT_CONCURRENCY);
     }
 
-    public VDJCAlignmentsReader(String fileName, VDJCLibraryRegistry vdjcRegistry, boolean useSeparateDecoderThread) throws IOException {
-        this(new File(fileName), vdjcRegistry, useSeparateDecoderThread);
+    public VDJCAlignmentsReader(String fileName, VDJCLibraryRegistry vdjcRegistry, int concurrency) throws IOException {
+        this(Paths.get(fileName), vdjcRegistry, concurrency);
     }
 
     public VDJCAlignmentsReader(File file) throws IOException {
@@ -86,37 +97,35 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
     }
 
     public VDJCAlignmentsReader(File file, VDJCLibraryRegistry vdjcRegistry) throws IOException {
-        this(new BufferedInputStream(new FileInputStream(file), DEFAULT_BUFFER_SIZE),
-                vdjcRegistry, file.length(), false);
+        this(file, vdjcRegistry, DEFAULT_CONCURRENCY);
     }
 
-    public VDJCAlignmentsReader(File file, VDJCLibraryRegistry vdjcRegistry, boolean useSeparateDecoderThread) throws IOException {
-        this(new BufferedInputStream(new FileInputStream(file), DEFAULT_BUFFER_SIZE),
-                vdjcRegistry, file.length(), useSeparateDecoderThread);
+    public VDJCAlignmentsReader(File file, VDJCLibraryRegistry vdjcRegistry, int concurrency) throws IOException {
+        this(file.toPath(), vdjcRegistry, concurrency);
     }
 
-    public VDJCAlignmentsReader(InputStream inputStream) {
-        this(inputStream, VDJCLibraryRegistry.getDefault(), 0, false);
+    public VDJCAlignmentsReader(Path path) throws IOException {
+        this(path, VDJCLibraryRegistry.getDefault());
     }
 
-    public VDJCAlignmentsReader(InputStream inputStream, boolean useSeparateDecoderThread) {
-        this(inputStream, VDJCLibraryRegistry.getDefault(), 0, useSeparateDecoderThread);
+    public VDJCAlignmentsReader(Path path, VDJCLibraryRegistry vdjcRegistry) throws IOException {
+        this(path, vdjcRegistry, DEFAULT_CONCURRENCY);
     }
 
-    public VDJCAlignmentsReader(InputStream inputStream, VDJCLibraryRegistry vdjcRegistry) {
-        this(inputStream, vdjcRegistry, 0, false);
+    public VDJCAlignmentsReader(Path path, VDJCLibraryRegistry vdjcRegistry, int concurrency) throws IOException {
+        this(path, vdjcRegistry, concurrency, ForkJoinPool.commonPool());
     }
 
-    public VDJCAlignmentsReader(InputStream inputStream, long size) {
-        this(inputStream, VDJCLibraryRegistry.getDefault(), size, false);
+    public VDJCAlignmentsReader(Path path, VDJCLibraryRegistry vdjcRegistry, int concurrency, ExecutorService executor) throws IOException {
+        this(path, vdjcRegistry, concurrency, executor, DEFAULT_READ_AHEAD_BLOCKS);
     }
 
-    public VDJCAlignmentsReader(InputStream inputStream, VDJCLibraryRegistry vdjcRegistry,
-                                long size, boolean useSeparateDecoderThread) {
-        this.inputStream = countingInputStream = new CountingInputStream(inputStream);
+    public VDJCAlignmentsReader(Path path, VDJCLibraryRegistry vdjcRegistry, int concurrency, ExecutorService executor, int readAheadBlocks) throws IOException {
+        this.input = new PrimitivIHybrid(executor, path);
+        this.readAheadBlocks = readAheadBlocks;
         this.vdjcRegistry = vdjcRegistry;
-        this.size = size;
-        this.useSeparateDecoderThread = useSeparateDecoderThread;
+        this.concurrency = concurrency;
+        this.size = Files.size(path);
     }
 
     public void init() {
@@ -127,37 +136,44 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
         if (reader != null)
             return;
 
-        PrimitivI input = new PrimitivI(inputStream);
+        try (final PrimitivI i = input.beginPrimitivI(true)) {
+            assert MAGIC_BYTES.length == MAGIC_LENGTH;
+            byte[] magic = new byte[MAGIC_LENGTH];
+            i.readFully(magic);
+            String magicString = new String(magic);
+            this.magic = magicString;
 
-        assert MAGIC_BYTES.length == MAGIC_LENGTH;
-        byte[] magic = new byte[MAGIC_LENGTH];
-        input.readFully(magic);
-        String magicString = new String(magic);
-        this.magic = magicString;
+            // SerializersManager serializersManager = input.getSerializersManager();
+            switch (magicString) {
+                case MAGIC:
+                    break;
+                default:
+                    throw new RuntimeException("Unsupported file format; .vdjca file of version " + new String(magic)
+                            + " while you are running MiXCR " + MAGIC);
+            }
 
-        // SerializersManager serializersManager = input.getSerializersManager();
-        switch (magicString) {
-            case MAGIC_V13:
-                add_v3_0_3_CustomSerializers(input);
-                break;
-            case MAGIC:
-                break;
-            default:
-                throw new RuntimeException("Unsupported file format; .vdjca file of version " + new String(magic)
-                        + " while you are running MiXCR " + MAGIC);
+            versionInfo = i.readUTF();
+
+            parameters = i.readObject(VDJCAlignerParameters.class);
+            pipelineConfiguration = i.readObject(PipelineConfiguration.class);
+
+            this.usedGenes = initPrimitivIState(i, parameters, vdjcRegistry, geneFeatureRefs);
         }
 
-        versionInfo = input.readUTF();
+        this.reader = input.beginPrimitivIBlocks(VDJCAlignments.class, concurrency, readAheadBlocks);
+    }
 
-        parameters = input.readObject(VDJCAlignerParameters.class);
-        pipelineConfiguration = input.readObject(PipelineConfiguration.class);
-
-        this.usedGenes = IOUtil.readAndRegisterGeneReferences(input, vdjcRegistry, parameters);
+    /**
+     * See {@link VDJCAlignmentsWriter#initPrimitivOState(PrimitivO, List, HasFeatureToAlign)}.
+     */
+    public static List<VDJCGene> initPrimitivIState(PrimitivI i, HasFeatureToAlign featuresToAlign,
+                                                    VDJCLibraryRegistry registry, Map<GeneFeature, GeneFeature> geneFeatureRefs) {
+        List<VDJCGene> genes = IOUtil.readAndRegisterGeneReferences(i, registry, featuresToAlign);
 
         // Registering links to features to align
         for (GeneType gt : GeneType.VDJC_REFERENCE) {
-            GeneFeature featureParams = parameters.getFeatureToAlign(gt);
-            GeneFeature featureDeserialized = input.readObject(GeneFeature.class);
+            GeneFeature featureParams = featuresToAlign.getFeatureToAlign(gt);
+            GeneFeature featureDeserialized = i.readObject(GeneFeature.class);
             if (!Objects.equals(featureDeserialized, featureParams))
                 throw new RuntimeException("Wrong format.");
 
@@ -169,17 +185,16 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
             }
 
             if (featureDeserialized != null)
-                input.putKnownObject(featureParams);
+                i.putKnownObject(featureParams);
         }
 
-        this.reader = new BasicVDJCAlignmentReader(new AlignmentsIO.InputStreamBufferReader(inputStream),
-                input.getState(), useSeparateDecoderThread);
+        return genes;
     }
 
-    public int getQueueSize() {
+    public PrimitivIBlocksStats getStats() {
         if (reader == null)
-            return -1;
-        return reader.getQueueSize();
+            return null;
+        return reader.getParent().getStats();
     }
 
     public synchronized VDJCAlignerParameters getParameters() {
@@ -204,6 +219,7 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
      * @return information about version of MiXCR which produced this file
      */
     public String getVersionInfo() {
+        init();
         return versionInfo;
     }
 
@@ -213,6 +229,7 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
      * @return magic bytes of this file
      */
     public String getMagic() {
+        init();
         return magic;
     }
 
@@ -224,12 +241,12 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
     public double getProgress() {
         if (size == 0)
             return Double.NaN;
-        return (1.0 * countingInputStream.getBytesRead()) / size;
+        return (1.0 * input.getPosition()) / size;
     }
 
     @Override
     public boolean isFinished() {
-        return closed || (countingInputStream != null && countingInputStream.getBytesRead() == size);
+        return closed || input.getPosition() == size;
     }
 
     @Override
@@ -242,12 +259,18 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
             return;
 
         try {
+            // Closing blocked reader
+            reader.close();
+
             // If all alignments are read
             // footer with number of reads processed to produce this
             // file can be read form the stream.
             if (onEnd)
-                numberOfReads = new PrimitivI(inputStream).readLong();
-            inputStream.close();
+                try (final PrimitivI i = input.beginPrimitivI()) {
+                    numberOfReads = i.readLong();
+                }
+
+            input.close();
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
