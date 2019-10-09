@@ -39,6 +39,7 @@ import com.milaboratory.primitivio.PrimitivO;
 import com.milaboratory.primitivio.blocks.PrimitivOBlocks;
 import com.milaboratory.primitivio.blocks.PrimitivOBlocksStats;
 import com.milaboratory.primitivio.blocks.PrimitivOHybrid;
+import com.milaboratory.util.io.HasPosition;
 import io.repseq.core.GeneFeature;
 import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
@@ -55,7 +56,7 @@ import java.util.concurrent.ForkJoinPool;
 
 import static com.milaboratory.mixcr.basictypes.AlignmentsIO.DEFAULT_ALIGNMENTS_IN_BLOCK;
 
-public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
+public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI, HasPosition {
     public static final int DEFAULT_ENCODER_THREADS = 3;
     static final String MAGIC_V15 = "MiXCR.VDJC.V15";
     static final String MAGIC = MAGIC_V15;
@@ -164,6 +165,11 @@ public final class VDJCAlignmentsWriter implements VDJCAlignmentsWriterI {
         }
 
         writer = output.beginPrimitivOBlocks(encoderThreads, alignmentsInBlock);
+    }
+
+    @Override
+    public long getPosition() {
+        return output.getPosition();
     }
 
     /**

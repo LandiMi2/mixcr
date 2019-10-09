@@ -284,20 +284,19 @@ public final class RunMiXCR {
             this.aligner = aligner;
         }
 
-        private byte[] serializedAlignments = null;
+        private File alignmentsFile = null;
 
-        public VDJCAlignmentsReader resultReader() {
-            if (serializedAlignments == null) {
-                final ByteArrayOutputStream data = new ByteArrayOutputStream();
-                try (VDJCAlignmentsWriter writer = new VDJCAlignmentsWriter(data)) {
+        public VDJCAlignmentsReader resultReader() throws IOException {
+            if (alignmentsFile == null) {
+                alignmentsFile = TempFileManager.getTempFile();
+                try (VDJCAlignmentsWriter writer = new VDJCAlignmentsWriter(alignmentsFile)) {
                     writer.header(aligner, null);
                     for (VDJCAlignments alignment : alignments)
                         writer.write(alignment);
                     writer.setNumberOfProcessedReads(totalNumberOfReads);
                 }
-                serializedAlignments = data.toByteArray();
             }
-            return new VDJCAlignmentsReader(new ByteArrayInputStream(serializedAlignments));
+            return new VDJCAlignmentsReader(alignmentsFile);
         }
     }
 

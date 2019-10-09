@@ -30,11 +30,17 @@
 package com.milaboratory.mixcr.cli;
 
 import cc.redberry.pipe.util.StatusReporter;
-import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.milaboratory.cli.ActionConfiguration;
 import com.milaboratory.cli.PipelineConfiguration;
 import com.milaboratory.mixcr.assembler.*;
-import com.milaboratory.mixcr.basictypes.*;
+import com.milaboratory.mixcr.basictypes.ClnAWriter;
+import com.milaboratory.mixcr.basictypes.ClnsWriter;
+import com.milaboratory.mixcr.basictypes.CloneSet;
+import com.milaboratory.mixcr.basictypes.VDJCAlignmentsReader;
 import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
 import com.milaboratory.util.SmartProgressReporter;
 import io.repseq.core.VDJCGene;
@@ -193,7 +199,7 @@ public class CommandAssemble extends ACommandWithSmartOverwriteWithSingleInputMi
                 StatusReporter reporter = new StatusReporter();
                 reporter.addCustomProviderFromLambda(() ->
                         new StatusReporter.Status(
-                                "Reader buffer: " + assemblerRunner.getQueueSize(),
+                                "Reader buffer: FIXME " /*+ assemblerRunner.getQueueSize()*/,
                                 assemblerRunner.isFinished()));
                 reporter.start();
             }
