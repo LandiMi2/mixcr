@@ -117,7 +117,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         this.usedGenes = cloneSet.getUsedGenes();
 
         // Saving features to align
-        this.featureToAlign = new ClnsReader.GT2GFAdapter(cloneSet.alignedFeatures);
+        // this.featureToAlign = new ClnsReader.GT2GFAdapter(cloneSet.alignedFeatures);
 
         // Writing number of clones ahead of any other content to make it available
         // in known file position (MAGIC_LENGTH)
@@ -132,21 +132,19 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
 
         // Writing aligner parameters
         output.writeObject(cloneSet.alignmentParameters);
+        Objects.requireNonNull(cloneSet.alignmentParameters);
+        featureToAlign = cloneSet.alignmentParameters;
 
         // Writing assembler parameters
         output.writeObject(cloneSet.assemblerParameters);
 
-        // Writing aligned gene features for each gene type
-        IO.writeGT2GFMap(output, cloneSet.alignedFeatures);
-
-        // These GeneFeature objects and corresponding nucleotide sequences from all
-        // genes in analysis will be added to the set of known references of PrimitivO object
-        // so that they will be serialized as 1-2 byte reference records (see PrimitivIO implementation)
-
         // During deserialization, the same procedure (in the same order) will be applied to
         // the PrimitivI object, so that correct singleton objects (GeneFeature objects and sequences) will be
-        // deserialized from reference records
-        IOUtil.writeAndRegisterGeneReferences(output, usedGenes, featureToAlign);
+        // deserialized from reference records.
+        // The GeneFeature objects and corresponding nucleotide sequences from all
+        // genes in analysis will be added to the set of known references of PrimitivO object
+        // so that they will be serialized as 1-2 byte reference records (see PrimitivIO implementation).
+        IOUtil.stdVDJCPrimitivOStateInit(output, usedGenes, cloneSet);
 
         // Saving stream position of the first clone object
         // this value will be written to the end of the file
@@ -199,6 +197,8 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         private final HasFeatureToAlign featureToAlign;
 
         public VDJCAlignmentsSerializer(List<VDJCGene> genes, HasFeatureToAlign featureToAlign) {
+            Objects.requireNonNull(genes);
+            Objects.requireNonNull(featureToAlign);
             this.genes = genes;
             this.featureToAlign = featureToAlign;
         }
@@ -207,7 +207,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         public void write(Collection<VDJCAlignments> data, OutputStream stream) {
             PrimitivO primitivO = new PrimitivO(stream);
             // Initializing PrimitivO object (see big comment block in writeClones(...) method
-            IOUtil.registerGeneReferences(primitivO, genes, featureToAlign);
+            IOUtil.registerGeneReferencesO(primitivO, genes, featureToAlign);
             for (VDJCAlignments alignments : data) {
                 // Checking that alignments has the same alignedFeature as was in cloneSet
                 assert Arrays.stream(GeneType.values())
@@ -226,7 +226,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         @Override
         public OutputPort<VDJCAlignments> read(InputStream stream) {
             PrimitivI primitivI = new PrimitivI(stream);
-            IOUtil.registerGeneReferences(primitivI, genes, featureToAlign);
+            IOUtil.registerGeneReferencesI(primitivI, genes, featureToAlign);
             // Will end on null object, that was added to the stream
             return new PipeDataInputReader<>(VDJCAlignments.class, primitivI);
         }

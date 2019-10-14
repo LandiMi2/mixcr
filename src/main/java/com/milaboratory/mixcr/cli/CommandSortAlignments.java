@@ -36,6 +36,7 @@ import cc.redberry.pipe.util.CountingOutputPort;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.milaboratory.cli.ActionConfiguration;
+import com.milaboratory.mixcr.basictypes.IOUtil;
 import com.milaboratory.mixcr.basictypes.VDJCAlignments;
 import com.milaboratory.mixcr.basictypes.VDJCAlignmentsReader;
 import com.milaboratory.mixcr.basictypes.VDJCAlignmentsWriter;
@@ -113,7 +114,7 @@ public class CommandSortAlignments extends ACommandWithSmartOverwriteWithSingleI
                          new PipeWriter<VDJCAlignments>(stream) {
                              @Override
                              protected void init() {
-                                 VDJCAlignmentsWriter.initPrimitivOState(output, usedAlleles, parameters);
+                                 IOUtil.stdVDJCPrimitivOStateInit(output, usedAlleles, parameters);
                              }
                          }) {
                 for (VDJCAlignments datum : data)
@@ -126,8 +127,8 @@ public class CommandSortAlignments extends ACommandWithSmartOverwriteWithSingleI
             return new PipeReader<VDJCAlignments>(VDJCAlignments.class, stream) {
                 @Override
                 protected void init() {
-                    VDJCAlignmentsReader.initPrimitivIState(input, parameters,
-                            usedAlleles.get(0).getParentLibrary().getParent(), null);
+                    IOUtil.stdVDJCPrimitivIStateInit(input, parameters,
+                            usedAlleles.get(0).getParentLibrary().getParent());
                 }
             };
         }

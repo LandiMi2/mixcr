@@ -93,7 +93,7 @@ public final class ClnAReader extends PipelineConfigurationReaderMiXCR implement
     final VDJCAlignerParameters alignerParameters;
     final CloneAssemblerParameters assemblerParameters;
 
-    final EnumMap<GeneType, GeneFeature> alignedFeatures;
+    // final EnumMap<GeneType, GeneFeature> alignedFeatures;
     final List<VDJCGene> genes;
 
     final PrimitivIState inputState;
@@ -180,8 +180,11 @@ public final class ClnAReader extends PipelineConfigurationReaderMiXCR implement
         this.configuration = input.readObject(PipelineConfiguration.class);
         this.alignerParameters = input.readObject(VDJCAlignerParameters.class);
         this.assemblerParameters = input.readObject(CloneAssemblerParameters.class);
-        this.alignedFeatures = IO.readGF2GTMap(input);
-        this.genes = IOUtil.readAndRegisterGeneReferences(input, libraryRegistry, new GT2GFAdapter(alignedFeatures));
+
+        // this.alignedFeatures = IO.readGF2GTMap(input);
+        // this.genes = IOUtil.readAndRegisterGeneReferences(input, libraryRegistry, new GT2GFAdapter(alignedFeatures));
+        this.genes = IOUtil.stdVDJCPrimitivIStateInit(input,  this.alignerParameters, libraryRegistry);
+
         this.inputState = input.getState();
     }
 
@@ -263,7 +266,7 @@ public final class ClnAReader extends PipelineConfigurationReaderMiXCR implement
         for (int i = 0; i < count; i++)
             clones.add(input.readObject(Clone.class));
 
-        return new CloneSet(clones, genes, alignedFeatures, alignerParameters, assemblerParameters);
+        return new CloneSet(clones, genes, alignerParameters, assemblerParameters);
     }
 
     /**
@@ -329,13 +332,10 @@ public final class ClnAReader extends PipelineConfigurationReaderMiXCR implement
         private final PipeDataInputReader<Clone> clones;
         volatile boolean isFinished = false;
 
-
         CloneAlignmentsPort() throws IOException {
             PrimitivI input = inputState.createPrimitivI(new InputDataStream(firstClonePosition, index[0]));
             this.clones = new PipeDataInputReader<>(Clone.class, input, numberOfClones);
-            this.fakeCloneSet = new CloneSet(Collections.EMPTY_LIST,
-                    genes, alignedFeatures,
-                    alignerParameters, assemblerParameters);
+            this.fakeCloneSet = new CloneSet(Collections.EMPTY_LIST, genes, alignerParameters, assemblerParameters);
         }
 
         @Override

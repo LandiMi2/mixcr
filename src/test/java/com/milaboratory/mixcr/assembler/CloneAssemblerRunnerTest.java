@@ -152,8 +152,8 @@ public class CloneAssemblerRunnerTest {
         Assert.assertArrayEquals(expected.getAssemblingFeatures(), actual.getAssemblingFeatures());
 
         for (GeneType geneType : GeneType.values())
-            Assert.assertEquals(expected.getAlignedGeneFeature(geneType),
-                    actual.getAlignedGeneFeature(geneType));
+            Assert.assertEquals(expected.getFeatureToAlign(geneType),
+                    actual.getFeatureToAlign(geneType));
 
         for (int i = 0; i < expected.getClones().size(); ++i)
             Assert.assertEquals(expected.getClones().get(i), actual.getClones().get(i));

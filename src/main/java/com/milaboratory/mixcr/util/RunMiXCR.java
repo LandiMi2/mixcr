@@ -144,7 +144,7 @@ public final class RunMiXCR {
         try (ClnAReader reader = new ClnAReader(clnaFile.toPath(), VDJCLibraryRegistry.getDefault());
              PrimitivO tmpOut = new PrimitivO(new BufferedOutputStream(new FileOutputStream(tmpFile)));) {
 
-            IOUtil.registerGeneReferences(tmpOut, align.usedGenes, align.parameters.alignerParameters);
+            IOUtil.registerGeneReferencesO(tmpOut, align.usedGenes, align.parameters.alignerParameters);
 
             final CloneFactory cloneFactory = new CloneFactory(reader.getAssemblerParameters().getCloneFactoryParameters(),
                     reader.getAssemblingFeatures(), reader.getGenes(), reader.getAlignerParameters().getFeaturesToAlignMap());
@@ -179,7 +179,7 @@ public final class RunMiXCR {
 
         Clone[] clones = new Clone[totalClonesCount];
         try (PrimitivI tmpIn = new PrimitivI(new BufferedInputStream(new FileInputStream(tmpFile)))) {
-            IOUtil.registerGeneReferences(tmpIn, align.usedGenes, align.parameters.alignerParameters);
+            IOUtil.registerGeneReferencesI(tmpIn, align.usedGenes, align.parameters.alignerParameters);
             int i = 0;
             for (Clone clone : CUtils.it(new PipeDataInputReader<>(Clone.class, tmpIn, totalClonesCount)))
                 clones[i++] = clone;
@@ -190,8 +190,8 @@ public final class RunMiXCR {
         Arrays.sort(clones, Comparator.comparingDouble(c -> -c.getCount()));
         for (int i = 0; i < clones.length; i++)
             clones[i] = clones[i].setId(i);
-        CloneSet cloneSet = new CloneSet(Arrays.asList(clones), align.usedGenes, align.parameters.alignerParameters.getFeaturesToAlignMap(),
-                align.parameters.alignerParameters, align.parameters.cloneAssemblerParameters);
+        CloneSet cloneSet = new CloneSet(Arrays.asList(clones), align.usedGenes, align.parameters.alignerParameters,
+                align.parameters.cloneAssemblerParameters);
 
         return new FullSeqAssembleResult(assemble, cloneSet);
     }

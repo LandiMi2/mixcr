@@ -33,7 +33,6 @@ import cc.redberry.pipe.OutputPortCloseable;
 import com.milaboratory.cli.PipelineConfiguration;
 import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
 import com.milaboratory.primitivio.PrimitivI;
-import com.milaboratory.primitivio.PrimitivO;
 import com.milaboratory.primitivio.blocks.PrimitivIBlocks;
 import com.milaboratory.primitivio.blocks.PrimitivIBlocksStats;
 import com.milaboratory.primitivio.blocks.PrimitivIHybrid;
@@ -51,7 +50,6 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
 
@@ -128,11 +126,11 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
         this.size = Files.size(path);
     }
 
-    public void init() {
-        init(null);
-    }
+    // public void init() {
+    //     init(null);
+    // }
 
-    void init(Map<GeneFeature, GeneFeature> geneFeatureRefs) {
+    public void init() {
         if (reader != null)
             return;
 
@@ -157,38 +155,10 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
             parameters = i.readObject(VDJCAlignerParameters.class);
             pipelineConfiguration = i.readObject(PipelineConfiguration.class);
 
-            this.usedGenes = initPrimitivIState(i, parameters, vdjcRegistry, geneFeatureRefs);
+            this.usedGenes = IOUtil.stdVDJCPrimitivIStateInit(i, parameters, vdjcRegistry);
         }
 
         this.reader = input.beginPrimitivIBlocks(VDJCAlignments.class, concurrency, readAheadBlocks);
-    }
-
-    /**
-     * See {@link VDJCAlignmentsWriter#initPrimitivOState(PrimitivO, List, HasFeatureToAlign)}.
-     */
-    public static List<VDJCGene> initPrimitivIState(PrimitivI i, HasFeatureToAlign featuresToAlign,
-                                                    VDJCLibraryRegistry registry, Map<GeneFeature, GeneFeature> geneFeatureRefs) {
-        List<VDJCGene> genes = IOUtil.readAndRegisterGeneReferences(i, registry, featuresToAlign);
-
-        // Registering links to features to align
-        for (GeneType gt : GeneType.VDJC_REFERENCE) {
-            GeneFeature featureParams = featuresToAlign.getFeatureToAlign(gt);
-            GeneFeature featureDeserialized = i.readObject(GeneFeature.class);
-            if (!Objects.equals(featureDeserialized, featureParams))
-                throw new RuntimeException("Wrong format.");
-
-            // Find corresponding reference
-            if (geneFeatureRefs != null) {
-                featureParams = geneFeatureRefs.get(featureParams);
-                if (featureParams == null)
-                    throw new RuntimeException("Absent record for " + featureDeserialized + " in geneFeatureRefs map.");
-            }
-
-            if (featureDeserialized != null)
-                i.putKnownObject(featureParams);
-        }
-
-        return genes;
     }
 
     public PrimitivIBlocksStats getStats() {
@@ -295,28 +265,28 @@ public final class VDJCAlignmentsReader extends PipelineConfigurationReaderMiXCR
         return al.setAlignmentsIndex(counter++);
     }
 
-    /**
-     * Produce reader that uses the same reference for geneFeatures.
-     *
-     * @param reader     target reader
-     * @param parameters parameters to take reference from
-     */
-    public static void initGeneFeatureReferencesFrom(VDJCAlignmentsReader reader, VDJCAlignerParameters parameters) {
-        Map<GeneFeature, GeneFeature> featureRefs = new HashMap<>();
-        for (GeneType gt : GeneType.VDJC_REFERENCE) {
-            GeneFeature f = parameters.getFeatureToAlign(gt);
-            featureRefs.put(f, f);
-        }
-        reader.init(featureRefs);
-    }
-
-    /**
-     * Produce reader that uses the same reference for geneFeatures.
-     *
-     * @param reader       target reader
-     * @param sourceReader reader to take reference from
-     */
-    public static void initGeneFeatureReferencesFrom(VDJCAlignmentsReader reader, VDJCAlignmentsReader sourceReader) {
-        initGeneFeatureReferencesFrom(reader, sourceReader.getParameters());
-    }
+    // /**
+    //  * Produce reader that uses the same reference for geneFeatures.
+    //  *
+    //  * @param reader     target reader
+    //  * @param parameters parameters to take reference from
+    //  */
+    // public static void initGeneFeatureReferencesFrom(VDJCAlignmentsReader reader, VDJCAlignerParameters parameters) {
+    //     Map<GeneFeature, GeneFeature> featureRefs = new HashMap<>();
+    //     for (GeneType gt : GeneType.VDJC_REFERENCE) {
+    //         GeneFeature f = parameters.getFeatureToAlign(gt);
+    //         featureRefs.put(f, f);
+    //     }
+    //     reader.init(featureRefs);
+    // }
+    //
+    // /**
+    //  * Produce reader that uses the same reference for geneFeatures.
+    //  *
+    //  * @param reader       target reader
+    //  * @param sourceReader reader to take reference from
+    //  */
+    // public static void initGeneFeatureReferencesFrom(VDJCAlignmentsReader reader, VDJCAlignmentsReader sourceReader) {
+    //     initGeneFeatureReferencesFrom(reader, sourceReader.getParameters());
+    // }
 }

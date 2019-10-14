@@ -80,7 +80,7 @@ public class ClnsReader extends PipelineConfigurationReaderMiXCR implements Auto
             return;
 
         // Registering custom serializer
-        input.getSerializersManager().registerCustomSerializer(GeneFeature.class, new GeneFeatureSerializer(true));
+        //input.getSerializersManager().registerCustomSerializer(GeneFeature.class, new GeneFeatureSerializer(true));
 
         byte[] magicBytes = new byte[MAGIC_LENGTH];
         input.readFully(magicBytes);
@@ -106,15 +106,17 @@ public class ClnsReader extends PipelineConfigurationReaderMiXCR implements Auto
         alignerParameters = input.readObject(VDJCAlignerParameters.class);
         assemblerParameters = input.readObject(CloneAssemblerParameters.class);
 
-        EnumMap<GeneType, GeneFeature> alignedFeatures = IO.readGF2GTMap(input);
-        List<VDJCGene> genes = IOUtil.readAndRegisterGeneReferences(input, libraryRegistry, new GT2GFAdapter(alignedFeatures));
+        // EnumMap<GeneType, GeneFeature> alignedFeatures = IO.readGF2GTMap(input);
+        // List<VDJCGene> genes = IOUtil.readAndRegisterGeneReferences(input, libraryRegistry, new GT2GFAdapter(alignedFeatures));
+
+        List<VDJCGene> genes = IOUtil.stdVDJCPrimitivIStateInit(input, alignerParameters, libraryRegistry);
 
         int count = input.readInt();
         List<Clone> clones = new ArrayList<>(count);
         for (int i = 0; i < count; i++)
             clones.add(input.readObject(Clone.class));
 
-        this.cloneSet = new CloneSet(clones, genes, alignedFeatures, alignerParameters, assemblerParameters);
+        this.cloneSet = new CloneSet(clones, genes, alignerParameters, assemblerParameters);
         cloneSet.versionInfo = versionInfo;
 
         initialized = true;

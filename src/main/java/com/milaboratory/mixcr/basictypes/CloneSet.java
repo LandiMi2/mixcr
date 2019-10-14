@@ -42,16 +42,16 @@ import java.util.*;
 /**
  * Created by poslavsky on 10/07/14.
  */
-public final class CloneSet implements Iterable<Clone> {
+public final class CloneSet implements Iterable<Clone>, HasFeatureToAlign {
     String versionInfo;
     final CloneAssemblerParameters assemblerParameters;
     final VDJCAlignerParameters alignmentParameters;
-    final EnumMap<GeneType, GeneFeature> alignedFeatures;
+    // final EnumMap<GeneType, GeneFeature> alignedFeatures;
     final List<VDJCGene> usedGenes;
     final List<Clone> clones;
     final long totalCount;
 
-    public CloneSet(List<Clone> clones, Collection<VDJCGene> usedGenes, EnumMap<GeneType, GeneFeature> alignedFeatures,
+    public CloneSet(List<Clone> clones, Collection<VDJCGene> usedGenes,
                     VDJCAlignerParameters alignmentParameters, CloneAssemblerParameters assemblerParameters) {
         this.clones = Collections.unmodifiableList(new ArrayList<>(clones));
         long totalCount = 0;
@@ -59,7 +59,7 @@ public final class CloneSet implements Iterable<Clone> {
             totalCount += clone.count;
             clone.setParentCloneSet(this);
         }
-        this.alignedFeatures = alignedFeatures.clone();
+        // this.alignedFeatures = alignedFeatures.clone();
         this.alignmentParameters = alignmentParameters;
         this.assemblerParameters = assemblerParameters;
         this.usedGenes = Collections.unmodifiableList(new ArrayList<>(usedGenes));
@@ -84,7 +84,7 @@ public final class CloneSet implements Iterable<Clone> {
                         throw new IllegalArgumentException("Different aligned feature for clones.");
                 }
         }
-        this.alignedFeatures = alignedFeatures;
+        // this.alignedFeatures = alignedFeatures;
         this.assemblerParameters = null;
         this.alignmentParameters = null;
         this.usedGenes = Collections.unmodifiableList(new ArrayList<>(genes.values()));
@@ -119,12 +119,13 @@ public final class CloneSet implements Iterable<Clone> {
         return usedGenes;
     }
 
-    public EnumMap<GeneType, GeneFeature> getAlignedFeatures() {
-        return new EnumMap<>(alignedFeatures);
-    }
+    // public EnumMap<GeneType, GeneFeature> getAlignedFeatures() {
+    //     return new EnumMap<>(alignedFeatures);
+    // }
 
-    public GeneFeature getAlignedGeneFeature(GeneType geneType) {
-        return alignedFeatures.get(geneType);
+    @Override
+    public GeneFeature getFeatureToAlign(GeneType geneType) {
+        return alignmentParameters.getFeatureToAlign(geneType);
     }
 
     public long getTotalCount() {
@@ -152,6 +153,6 @@ public final class CloneSet implements Iterable<Clone> {
                 newClones.add(c);
             }
         }
-        return new CloneSet(newClones, in.usedGenes, in.alignedFeatures, in.alignmentParameters, in.assemblerParameters);
+        return new CloneSet(newClones, in.usedGenes, in.alignmentParameters, in.assemblerParameters);
     }
 }

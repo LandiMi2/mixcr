@@ -131,7 +131,7 @@ public class CommandAssembleContigs extends ACommandWithSmartOverwriteWithSingle
             alignerParameters = reader.getAlignerParameters();
             cloneAssemblerParameters = reader.getAssemblerParameters();
             genes = reader.getGenes();
-            IOUtil.registerGeneReferences(tmpOut, genes, alignerParameters);
+            IOUtil.registerGeneReferencesO(tmpOut, genes, alignerParameters);
 
             ClnAReader.CloneAlignmentsPort cloneAlignmentsPort = reader.clonesAndAlignments();
             SmartProgressReporter.startProgressReport("Assembling", cloneAlignmentsPort);
@@ -245,7 +245,7 @@ public class CommandAssembleContigs extends ACommandWithSmartOverwriteWithSingle
 
         Clone[] clones = new Clone[totalClonesCount];
         try (PrimitivI tmpIn = new PrimitivI(new BufferedInputStream(new FileInputStream(out)))) {
-            IOUtil.registerGeneReferences(tmpIn, genes, alignerParameters);
+            IOUtil.registerGeneReferencesI(tmpIn, genes, alignerParameters);
             int i = 0;
             for (Clone clone : CUtils.it(new PipeDataInputReader<>(Clone.class, tmpIn, totalClonesCount)))
                 clones[i++] = clone;
@@ -254,8 +254,7 @@ public class CommandAssembleContigs extends ACommandWithSmartOverwriteWithSingle
         Arrays.sort(clones, Comparator.comparingDouble(c -> -c.getCount()));
         for (int i = 0; i < clones.length; i++)
             clones[i] = clones[i].setId(i);
-        CloneSet cloneSet = new CloneSet(Arrays.asList(clones), genes, alignerParameters.getFeaturesToAlignMap(),
-                alignerParameters, cloneAssemblerParameters);
+        CloneSet cloneSet = new CloneSet(Arrays.asList(clones), genes, alignerParameters, cloneAssemblerParameters);
 
         try (ClnsWriter writer = new ClnsWriter(getFullPipelineConfiguration(), cloneSet, out)) {
             SmartProgressReporter.startProgressReport(writer);
