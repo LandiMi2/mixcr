@@ -41,17 +41,21 @@ import com.milaboratory.primitivio.PipeDataInputReader;
 import com.milaboratory.primitivio.PrimitivI;
 import com.milaboratory.primitivio.PrimitivO;
 import com.milaboratory.primitivio.PrimitivOState;
+import com.milaboratory.primitivio.blocks.PrimitivOHybrid;
 import com.milaboratory.util.CanReportProgressAndStage;
 import com.milaboratory.util.ObjectSerializer;
 import com.milaboratory.util.Sorter;
 import gnu.trove.list.array.TLongArrayList;
 import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
-import org.apache.commons.io.output.CountingOutputStream;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Writer for CLNA file format.
@@ -62,9 +66,8 @@ import java.util.*;
 public final class ClnAWriter implements PipelineConfigurationWriter,
         AutoCloseable,
         CanReportProgressAndStage {
-    static final String MAGIC_V3 = "MiXCR.CLNA.V03";
-    static final String MAGIC_V4 = "MiXCR.CLNA.V04";
-    static final String MAGIC = MAGIC_V4;
+    static final String MAGIC_V5 = "MiXCR.CLNA.V05";
+    static final String MAGIC = MAGIC_V5;
     static final int MAGIC_LENGTH = MAGIC.length(); //14
 
     /**
@@ -74,8 +77,9 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
     /**
      * Used to read current position in output file
      */
-    private final CountingOutputStream outputStream;
-    private final PrimitivO output;
+    // private final CountingOutputStream outputStream;
+    // private final PrimitivO output;
+    private final PrimitivOHybrid output;
     private final PipelineConfiguration configuration;
 
     /**
@@ -94,10 +98,10 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
     public ClnAWriter(PipelineConfiguration configuration, File file) throws IOException {
         this.configuration = configuration;
         this.tempFile = new File(file.getAbsolutePath() + ".presorted");
-        this.outputStream = new CountingOutputStream(new BufferedOutputStream(
-                new FileOutputStream(file), 131072));
-        this.outputStream.write(MAGIC.getBytes(StandardCharsets.US_ASCII));
-        this.output = new PrimitivO(this.outputStream);
+        this.output = new PrimitivOHybrid(ForkJoinPool.commonPool(), file.toPath());
+        try (PrimitivO o = this.output.beginPrimitivO()) {
+            o.write(MAGIC.getBytes(StandardCharsets.US_ASCII));
+        }
     }
 
     private long positionOfFirstClone = -1;
@@ -116,47 +120,47 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         // Saving VDJC gene list
         this.usedGenes = cloneSet.getUsedGenes();
 
-        // Saving features to align
-        // this.featureToAlign = new ClnsReader.GT2GFAdapter(cloneSet.alignedFeatures);
+        try (PrimitivO o = this.output.beginPrimitivO(true)) {
 
-        // Writing number of clones ahead of any other content to make it available
-        // in known file position (MAGIC_LENGTH)
-        output.writeInt(cloneSet.size());
+            // Writing number of clones ahead of any other content to make it available
+            // in known file position (MAGIC_LENGTH)
+            o.writeInt(cloneSet.size());
 
-        // Writing version information
-        output.writeUTF(MiXCRVersionInfo.get()
-                .getVersionString(AppVersionInfo.OutputType.ToFile));
+            // Writing version information
+            o.writeUTF(MiXCRVersionInfo.get()
+                    .getVersionString(AppVersionInfo.OutputType.ToFile));
 
-        // Writing full pipeline configuration
-        output.writeObject(configuration);
+            // Writing full pipeline configuration
+            o.writeObject(configuration);
 
-        // Writing aligner parameters
-        output.writeObject(cloneSet.alignmentParameters);
-        Objects.requireNonNull(cloneSet.alignmentParameters);
-        featureToAlign = cloneSet.alignmentParameters;
+            // Writing aligner parameters
+            o.writeObject(cloneSet.alignmentParameters);
+            Objects.requireNonNull(cloneSet.alignmentParameters);
+            featureToAlign = cloneSet.alignmentParameters;
 
-        // Writing assembler parameters
-        output.writeObject(cloneSet.assemblerParameters);
+            // Writing assembler parameters
+            o.writeObject(cloneSet.assemblerParameters);
 
-        // During deserialization, the same procedure (in the same order) will be applied to
-        // the PrimitivI object, so that correct singleton objects (GeneFeature objects and sequences) will be
-        // deserialized from reference records.
-        // The GeneFeature objects and corresponding nucleotide sequences from all
-        // genes in analysis will be added to the set of known references of PrimitivO object
-        // so that they will be serialized as 1-2 byte reference records (see PrimitivIO implementation).
-        IOUtil.stdVDJCPrimitivOStateInit(output, usedGenes, cloneSet);
+            // During deserialization, the same procedure (in the same order) will be applied to
+            // the PrimitivI object, so that correct singleton objects (GeneFeature objects and sequences) will be
+            // deserialized from reference records.
+            // The GeneFeature objects and corresponding nucleotide sequences from all
+            // genes in analysis will be added to the set of known references of PrimitivO object
+            // so that they will be serialized as 1-2 byte reference records (see PrimitivIO implementation).
+            IOUtil.stdVDJCPrimitivOStateInit(o, usedGenes, cloneSet);
 
-        // Saving stream position of the first clone object
-        // this value will be written to the end of the file
-        positionOfFirstClone = outputStream.getByteCount();
+            // Saving stream position of the first clone object
+            // this value will be written to the end of the file
+            positionOfFirstClone = output.getPosition();
 
-        // Saving number of clones
-        numberOfClones = cloneSet.size();
+            // Saving number of clones
+            numberOfClones = cloneSet.size();
 
-        // Writing clones
-        for (Clone clone : cloneSet) {
-            output.writeObject(clone);
-            ++numberOfClonesWritten;
+            // Writing clones
+            for (Clone clone : cloneSet) {
+                o.writeObject(clone);
+                ++numberOfClonesWritten;
+            }
         }
 
         // Setting flag telling other methods that clones block was written successfully
@@ -177,7 +181,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         // Saving number of alignments
         this.numberOfAlignments = numberOfAlignments;
 
-        // Dirty heuristic to optimize trade-off between memory usage and number of random access places in file
+        // Dirty heuristic to optimize trade-off between memory usage and number of random access places in a file
         // to read from
         int chunkSize = (int) Math.min(Math.max(16384, numberOfAlignments / 8), 1048576);
 
