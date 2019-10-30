@@ -40,11 +40,12 @@ import com.milaboratory.mixcr.util.MiXCRVersionInfo;
 import com.milaboratory.primitivio.PipeDataInputReader;
 import com.milaboratory.primitivio.PrimitivI;
 import com.milaboratory.primitivio.PrimitivO;
-import com.milaboratory.primitivio.PrimitivOState;
+import com.milaboratory.primitivio.blocks.PrimitivOBlocks;
 import com.milaboratory.primitivio.blocks.PrimitivOHybrid;
 import com.milaboratory.util.CanReportProgressAndStage;
 import com.milaboratory.util.ObjectSerializer;
 import com.milaboratory.util.Sorter;
+import com.milaboratory.util.io.HasPosition;
 import gnu.trove.list.array.TLongArrayList;
 import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
@@ -150,7 +151,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
             IOUtil.stdVDJCPrimitivOStateInit(o, usedGenes, cloneSet);
 
             // Saving stream position of the first clone object
-            // this value will be written to the end of the file
+            // this value will be written to the very end of the file
             positionOfFirstClone = output.getPosition();
 
             // Saving number of clones
@@ -159,6 +160,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
             // Writing clones
             for (Clone clone : cloneSet) {
                 o.writeObject(clone);
+                // For progress reporting
                 ++numberOfClonesWritten;
             }
         }
@@ -249,119 +251,92 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
         // Indices that will be written below all alignments
         TLongArrayList aBlockOffset = new TLongArrayList();
         TLongArrayList aBlockCount = new TLongArrayList();
-
-        // Position of alignments with cloneIndex = -1 (not aligned alignments)
-        aBlockOffset.add(outputStream.getByteCount());
-
-        PrimitivOState outputState = output.getState();
-
         long previousAlsCount = 0;
         int currentCloneIndex = -1;
+        long indexBeginOffset;
 
-        // Writer
-        try ( // TODO parametrise
-              BasicVDJCAlignmentWriterFactory writerFactory = new BasicVDJCAlignmentWriterFactory(
-                      Math.min(4, Runtime.getRuntime().availableProcessors()),
-                      true);
-              // Writer
-              BasicVDJCAlignmentWriterFactory.Writer writer =
-                      writerFactory.createWriter(outputState, outputStream, false)) {
+        try (PrimitivOBlocks<VDJCAlignments>.Writer o = output.beginPrimitivOBlocks(
+                Runtime.getRuntime().availableProcessors(),
+                VDJCAlignmentsWriter.DEFAULT_ALIGNMENTS_IN_BLOCK)) {
 
-            // StatusReporter reporter = new StatusReporter();
-            // reporter.addCustomProvider(new StatusReporter.StatusProvider() {
-            //     volatile String status;
-            //     volatile boolean isClosed = false;
-            //
-            //     @Override
-            //     public void updateStatus() {
-            //         status = "Busy encoders: " + writerFactory.getBusyEncoders() + " / " + writerFactory.getEncodersCount();
-            //         isClosed = writerFactory.isClosed();
-            //     }
-            //
-            //     @Override
-            //     public boolean isFinished() {
-            //         return isClosed;
-            //     }
-            //
-            //     @Override
-            //     public String getStatus() {
-            //         return status;
-            //     }
-            // });
-            // reporter.start();
+            // Position of alignments with cloneIndex = -1 (not aligned alignments)
+            aBlockOffset.add(o.getPosition());
 
-            List<VDJCAlignments> block = new ArrayList<>();
+            // List<VDJCAlignments> block = new ArrayList<>();
             // Writing alignments and writing indices
             for (VDJCAlignments alignments : CUtils.it(sortedAlignments)) {
-
-                // Block is full
-                if (block.size() == AlignmentsIO.DEFAULT_ALIGNMENTS_IN_BLOCK) {
-                    writer.writeAsync(block);
-                    block = new ArrayList<>();
-                }
-
                 // End of clone
                 if (currentCloneIndex != alignments.cloneIndex) {
 
-                    if (!block.isEmpty()) {
-                        // This will also wait for the previous block (if async write was issued) to be flushed to the stream
-                        writer.writeSync(block);
-                        block = new ArrayList<>();
-                    } else
-                        writer.waitPreviousBlock();
+                    // Async flush
+                    o.flush();
+
+                    // No synchronization here
 
                     ++currentCloneIndex;
                     if (currentCloneIndex != alignments.cloneIndex)
                         throw new IllegalArgumentException("No alignments for clone number " + currentCloneIndex);
                     if (alignments.cloneIndex >= numberOfClones)
                         throw new IllegalArgumentException("Out of range clone Index in alignment: " + currentCloneIndex);
-                    aBlockOffset.add(outputStream.getByteCount());
+
+                    // Write stream position as soon as all the blocks will be flushed
+                    o.run(c -> {
+                        // In theory synchronization here is not required as all the IO operations as well as this code
+                        // are executed strictly sequentially
+
+                        //synchronized (aBlockOffset){
+                        aBlockOffset.add(((HasPosition) c).getPosition());
+                        //}
+                    });
+
                     aBlockCount.add(numberOfAlignmentsWritten - previousAlsCount);
                     previousAlsCount = numberOfAlignmentsWritten;
                 }
 
-                block.add(alignments);
+                o.write(alignments);
                 ++numberOfAlignmentsWritten;
             }
 
             // Writing last block, and waiting for all the data to be flushed
-            if (!block.isEmpty())
-                writer.writeSync(block);
-            else
-                writer.waitPreviousBlock();
+            o.flush();
+            o.sync();
+
+            // Writing position of last alignments block end
+            aBlockOffset.add(indexBeginOffset = o.getPosition());
         }
+
         // Closing sorted output port, this will delete presorted file
         sortedAlignments.close();
+
         // Writing count of alignments in the last block
         aBlockCount.add(numberOfAlignmentsWritten - previousAlsCount);
 
-        // Writing position of last alignments block end
-        aBlockOffset.add(outputStream.getByteCount());
         // To make counts index the same length as aBlockOffset
         aBlockCount.add(0);
 
         // Saving index offset in file to write in the end of the stream
-        long indexBeginOffset = outputStream.getByteCount();
         long previousValue = 0;
 
-        // Writing both indices
-        for (int i = 0; i < aBlockOffset.size(); i++) {
-            long iValue = aBlockOffset.get(i);
-            // Writing offset index using deltas to save space
-            // (smaller values are represented by less number of bytes in VarLong representation)
-            output.writeVarLong(iValue - previousValue);
-            previousValue = iValue;
+        try (PrimitivO o = output.beginPrimitivO()) {
+            // Writing both indices
+            for (int i = 0; i < aBlockOffset.size(); i++) {
+                long iValue = aBlockOffset.get(i);
+                // Writing offset index using deltas to save space
+                // (smaller values are represented by less number of bytes in VarLong representation)
+                o.writeVarLong(iValue - previousValue);
+                previousValue = iValue;
 
-            output.writeVarLong(aBlockCount.get(i));
+                o.writeVarLong(aBlockCount.get(i));
+            }
+
+            // Writing two key positions in a file
+            // This values will be using during deserialization to find certain blocks
+            o.writeLong(positionOfFirstClone);
+            o.writeLong(indexBeginOffset);
+
+            // Writing end-magic as a file integrity sign
+            o.write(IOUtil.getEndMagicBytes());
         }
-
-        // Writing two key positions in a file
-        // This values will be using during deserialization to find certain blocks
-        output.writeLong(positionOfFirstClone);
-        output.writeLong(indexBeginOffset);
-
-        // Writing end-magic as a file integrity sign
-        output.write(IOUtil.getEndMagicBytes());
 
         // Setting finished flag (will stop progress reporting)
         finished = true;
@@ -405,7 +380,7 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
     }
 
     @Override
-    public void close() {
+    public void close() throws IOException {
         finished = true;
         output.close();
     }
