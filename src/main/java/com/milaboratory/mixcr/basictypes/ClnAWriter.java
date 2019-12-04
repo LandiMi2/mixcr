@@ -157,6 +157,8 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
             // Saving number of clones
             numberOfClones = cloneSet.size();
 
+            // TODO change to Blocks???
+
             // Writing clones
             for (Clone clone : cloneSet) {
                 o.writeObject(clone);
@@ -279,10 +281,10 @@ public final class ClnAWriter implements PipelineConfigurationWriter,
                     if (alignments.cloneIndex >= numberOfClones)
                         throw new IllegalArgumentException("Out of range clone Index in alignment: " + currentCloneIndex);
 
-                    // Write stream position as soon as all the blocks will be flushed
+                    // Write stream position as soon as all the blocks are flushed
                     o.run(c -> {
-                        // In theory synchronization here is not required as all the IO operations as well as this code
-                        // are executed strictly sequentially
+                        // In theory synchronization for aBlockOffset access here is not required as all the IO
+                        // operations as well as this code are executed strictly sequentially
 
                         //synchronized (aBlockOffset){
                         aBlockOffset.add(((HasPosition) c).getPosition());

@@ -34,14 +34,12 @@ import cc.redberry.pipe.OutputPortCloseable;
 import cc.redberry.pipe.util.CountLimitingOutputPort;
 import com.milaboratory.cli.PipelineConfiguration;
 import com.milaboratory.mixcr.assembler.CloneAssemblerParameters;
-import com.milaboratory.mixcr.basictypes.ClnsReader.GT2GFAdapter;
 import com.milaboratory.mixcr.vdjaligners.VDJCAlignerParameters;
 import com.milaboratory.primitivio.PipeDataInputReader;
 import com.milaboratory.primitivio.PrimitivI;
-import com.milaboratory.primitivio.PrimitivIState;
+import com.milaboratory.primitivio.blocks.PrimitivIHybrid;
 import com.milaboratory.util.CanReportProgress;
 import io.repseq.core.GeneFeature;
-import io.repseq.core.GeneType;
 import io.repseq.core.VDJCGene;
 import io.repseq.core.VDJCLibraryRegistry;
 
@@ -49,29 +47,21 @@ import java.io.DataInput;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicLong;
-
-import static com.milaboratory.mixcr.cli.SerializerCompatibilityUtil.add_v3_0_3_CustomSerializers;
 
 /**
  * Reader of CLNA file format.
  */
 public final class ClnAReader extends PipelineConfigurationReaderMiXCR implements AutoCloseable {
-    public static final int DEFAULT_CHUNK_SIZE = 262144;
-    final int chunkSize;
-    /**
-     * Input file channel. All interaction with file are made through this object.
-     */
-    final FileChannel channel;
+    final PrimitivIHybrid input;
 
     // Index data
 
@@ -93,104 +83,78 @@ public final class ClnAReader extends PipelineConfigurationReaderMiXCR implement
     final VDJCAlignerParameters alignerParameters;
     final CloneAssemblerParameters assemblerParameters;
 
-    // final EnumMap<GeneType, GeneFeature> alignedFeatures;
     final List<VDJCGene> genes;
-
-    final PrimitivIState inputState;
 
     final int numberOfClones;
 
-    // Meta data
+    // Meta data (also from header)
 
     final String versionInfo;
 
-    public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry, int chunkSize) throws IOException {
-        if (chunkSize == 0)
-            throw new IllegalArgumentException();
+    public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry) throws IOException {
+        this.input = new PrimitivIHybrid(ForkJoinPool.commonPool(), path);
 
-        this.chunkSize = chunkSize;
-        this.channel = FileChannel.open(path, StandardOpenOption.READ);
         this.libraryRegistry = libraryRegistry;
 
-        PrimitivI input;
+        // File beginning
+        String magicString;
+        try (PrimitivI ii = this.input.beginPrimitivI()) {
+            // Reading magic string
+            byte[] magicBytes = new byte[ClnAWriter.MAGIC_LENGTH];
+            ii.readFully(magicBytes);
+            magicString = new String(magicBytes, StandardCharsets.US_ASCII);
 
-        // Reading magic string
-
-        ByteBuffer buf = ByteBuffer.allocate(ClnAWriter.MAGIC_LENGTH + 4); // ClnAWriter.MAGIC_LENGTH + 4 = 18
-        channel.read(buf, 0L);
-        buf.flip();
-
-        byte[] magicBytes = new byte[ClnAWriter.MAGIC_LENGTH];
-        buf.get(magicBytes);
-        String magicString = new String(magicBytes, StandardCharsets.US_ASCII);
-
-        // Reading number of clones
-
-        this.numberOfClones = buf.getInt();
-
-        // Reading key file offsets from last 16 bytes of the file
-
-        buf.flip();
-        buf.limit(16);
-        long fSize = channel.size() - IOUtil.END_MAGIC_LENGTH;
-        channel.read(buf, fSize - 16);
-        buf.flip();
-        this.firstClonePosition = buf.getLong();
-        long indexBegin = buf.getLong();
-
-        // Reading index data
-
-        input = new PrimitivI(new InputDataStream(indexBegin, fSize - 8));
-        switch (magicString) {
-            case ClnAWriter.MAGIC:
-                break;
-            default:
-                throw new IllegalArgumentException("Wrong file type. Magic = " + magicString +
-                        ", expected = " + ClnAWriter.MAGIC);
+            // Reading number of clones
+            this.numberOfClones = ii.readInt();
         }
 
-        this.index = new long[numberOfClones + 2];
-        this.counts = new long[numberOfClones + 2];
-        long previousValue = 0;
-        long totalAlignmentsCount = 0L;
-        for (int i = 0; i < numberOfClones + 2; i++) {
-            previousValue = index[i] = previousValue + input.readVarLong();
-            totalAlignmentsCount += counts[i] = input.readVarLong();
-        }
-        this.totalAlignmentsCount = totalAlignmentsCount;
+        // File ending
+        long indexBegin;
+        try (PrimitivI pi = this.input.beginRandomAccessPrimitivI(-IOUtil.END_MAGIC_LENGTH - 16)) {
+            // Reading key file offsets from last 16 bytes of the file
+            this.firstClonePosition = pi.readLong();
+            indexBegin = pi.readLong();
 
-        // Reading gene features
-
-        input = new PrimitivI(new InputDataStream(ClnAWriter.MAGIC_LENGTH + 4,
-                firstClonePosition));
-        switch (magicString) {
-            case ClnAWriter.MAGIC_V3:
-                add_v3_0_3_CustomSerializers(input);
-                break;
-            case ClnAWriter.MAGIC:
-                break;
-            default:
-                throw new IllegalStateException();
+            // Checking file consistency
+            byte[] endMagic = new byte[IOUtil.END_MAGIC_LENGTH];
+            pi.readFully(endMagic);
+            if (!Arrays.equals(IOUtil.getEndMagicBytes(), endMagic))
+                throw new RuntimeException("File is corrupted.");
         }
 
-        this.versionInfo = input.readUTF();
-        this.configuration = input.readObject(PipelineConfiguration.class);
-        this.alignerParameters = input.readObject(VDJCAlignerParameters.class);
-        this.assemblerParameters = input.readObject(CloneAssemblerParameters.class);
+        // Step back
+        try (PrimitivI pi = this.input.beginRandomAccessPrimitivI(indexBegin)) {
+            // Reading index data
+            this.index = new long[numberOfClones + 2];
+            this.counts = new long[numberOfClones + 2];
+            long previousValue = 0;
+            long totalAlignmentsCount = 0L;
+            for (int i = 0; i < numberOfClones + 2; i++) {
+                previousValue = index[i] = previousValue + pi.readVarLong();
+                totalAlignmentsCount += counts[i] = pi.readVarLong();
+            }
+            this.totalAlignmentsCount = totalAlignmentsCount;
+        }
 
-        // this.alignedFeatures = IO.readGF2GTMap(input);
-        // this.genes = IOUtil.readAndRegisterGeneReferences(input, libraryRegistry, new GT2GFAdapter(alignedFeatures));
-        this.genes = IOUtil.stdVDJCPrimitivIStateInit(input,  this.alignerParameters, libraryRegistry);
+        // Returning to the file begin
+        try (PrimitivI pi = this.input.beginPrimitivI(true)) {
+            switch (magicString) {
+                case ClnAWriter.MAGIC:
+                    break;
+                default:
+                    throw new IllegalStateException();
+            }
 
-        this.inputState = input.getState();
-    }
-
-    public ClnAReader(Path path, VDJCLibraryRegistry libraryRegistry) throws IOException {
-        this(path, libraryRegistry, DEFAULT_CHUNK_SIZE);
+            this.versionInfo = pi.readUTF();
+            this.configuration = pi.readObject(PipelineConfiguration.class);
+            this.alignerParameters = pi.readObject(VDJCAlignerParameters.class);
+            this.assemblerParameters = pi.readObject(CloneAssemblerParameters.class);
+            this.genes = IOUtil.stdVDJCPrimitivIStateInit(pi, this.alignerParameters, libraryRegistry);
+        }
     }
 
     public ClnAReader(String path, VDJCLibraryRegistry libraryRegistry) throws IOException {
-        this(Paths.get(path), libraryRegistry, DEFAULT_CHUNK_SIZE);
+        this(Paths.get(path), libraryRegistry);
     }
 
     @Override
@@ -255,13 +219,16 @@ public final class ClnAReader extends PipelineConfigurationReaderMiXCR implement
      * Read clone set completely
      */
     public CloneSet readCloneSet() throws IOException {
-        PrimitivI input = inputState.createPrimitivI(new InputDataStream(firstClonePosition, index[0]));
+        // TODO change to Blocks???
 
         // Reading clones
         int count = numberOfClones();
         List<Clone> clones = new ArrayList<>(count);
-        for (int i = 0; i < count; i++)
-            clones.add(input.readObject(Clone.class));
+
+        try (PrimitivI pi = input.beginRandomAccessPrimitivI(firstClonePosition)) {
+            for (int i = 0; i < count; i++)
+                clones.add(pi.readObject(Clone.class));
+        }
 
         return new CloneSet(clones, genes, alignerParameters, assemblerParameters);
     }
